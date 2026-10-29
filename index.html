@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Bitcoin laboratoriyasi</title>
+<style>
+:root{--bg:#f1efe9;--ink:#1d2433;--mut:#5d6575;--line:#d6d2c6;--acc:#e8870e;--ok:#1d7f5a;--bad:#c0392b;--card:#fff;--code:#f5f3ec;--keybg:#fff4dd;--navbg:#e3dfd2}
+@media (prefers-color-scheme:dark){:root{--bg:#161a22;--ink:#e8eaf0;--mut:#a3aab8;--line:#39404f;--card:#222836;--code:#1b202b;--keybg:#3a2f18;--navbg:#1f2430}header{background:#0e1117}button.b{background:#e8eaf0;color:#161a22}button.b.o{color:#fff}}
+:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 Georgia,serif}
+header{background:var(--ink);color:#fff;padding:16px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+header h1{margin:0;font-size:22px}header span{color:#cdd5e6;font-size:13px}
+nav{display:flex;gap:6px;overflow-x:auto;padding:10px 12px;background:var(--navbg);position:sticky;top:0;z-index:5}
+nav button{white-space:nowrap;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:8px 14px;border-radius:20px;font:inherit;cursor:pointer}
+nav button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+main{max-width:860px;margin:0 auto;padding:14px}
+.c{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin:12px 0}
+h2{margin:0 0 6px;font-size:20px}h3{margin:10px 0 2px;font-size:16px}.m{color:var(--mut);font-size:14px}p{margin:6px 0}
+input,select,textarea{background:var(--card);color:var(--ink)}
+input,select,textarea,button.b{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:8px;max-width:100%}
+textarea{width:100%;min-height:70px;font-family:Consolas,monospace;font-size:12px}
+button.b{background:var(--ink);color:#fff;border:0;cursor:pointer}button.b.o{background:var(--acc)}button.b:disabled{opacity:.5}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+code,.h{font-family:Consolas,monospace;font-size:12px;word-break:break-all}.h{display:block;background:var(--code);padding:5px 8px;border-radius:6px;margin:3px 0}
+.big{font-size:30px;font-weight:bold}.z{color:var(--acc);font-weight:bold}
+.blk{border-left:6px solid var(--ok)}.blk.bad{border-left-color:var(--bad)}.tx{font-size:14px;border-top:1px dashed var(--line);padding:5px 0}
+.key{background:var(--keybg);border:2px solid var(--acc)}
+:focus-visible{outline:3px solid var(--acc);outline-offset:2px}
+</style></head><body>
+<header><h1>Bitcoin laboratoriyasi</h1><span id="who"></span></header>
+<nav id="nav"></nav><main id="main"></main>
+<script>
+// Umumiy yadro: telefonda (brauzerda) ham, serverda (Node) ham bir xil ishlaydi.
+(function(g){
+const enc=new TextEncoder(),HALVING=210000,START=840000,I=Number.isSafeInteger;
+const hex=b=>[...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,'0')).join('');
+const sha=async s=>hex(await crypto.subtle.digest('SHA-256',enc.encode(s)));
+const dsha=async s=>hex(await crypto.subtle.digest('SHA-256',await crypto.subtle.digest('SHA-256',enc.encode(s))));
+const subsidy=i=>Math.floor(5e9/2**Math.floor((START+i)/HALVING)); // satoshi: 840000-blokdan boshlab 3.125 BTC
+const txData=t=>`${t.from}>${t.to}:${t.amount}:${t.fee}:${t.ts}:${t.l||''}:${t.n||0}`;
+const header=b=>`${b.i}|${b.prev}|${b.time}|${b.merkle}|${b.diff}|${b.nonce}`;
+const shopMsg=o=>`${o.kind}|${o.from}|${o.name||''}|${o.pid||''}|${o.id||''}|${o.qty||0}|${o.price||0}|${o.ts}`;
+async function merkle(txs){if(!txs.length)return dsha('');let l=await Promise.all(txs.map(t=>dsha(txData(t))));
+ while(l.length>1){if(l.length%2)l.push(l[l.length-1]);const n=[];for(let i=0;i<l.length;i+=2)n.push(await dsha(l[i]+l[i+1]));l=n}return l[0]}
+// p=true: kutilayotgan (mempool) tranzaksiyalar ham hisobga olinadi
+const bal=(st,a,p)=>{let s=0;const f=t=>{if(t.to===a)s+=t.amount;if(t.from===a)s-=t.amount+t.fee};st.chain.forEach(b=>b.txs.forEach(f));if(p)st.mempool.forEach(f);return s};
+const chainSigs=st=>new Set(st.chain.flatMap(b=>b.txs.map(t=>t.sig)));
+const pickTx=t=>({from:String(t.from),to:String(t.to),amount:t.amount,fee:t.fee,ts:t.ts,sig:String(t.sig||''),l:String(t.l||''),n:t.n||0});
+async function sigOk(st,addr,msg,sig){const u=st.users[addr];if(!u)return false;
+ try{const k=await crypto.subtle.importKey('jwk',{kty:'EC',crv:'P-256',x:u.pub.x,y:u.pub.y,ext:true},{name:'ECDSA',namedCurve:'P-256'},false,['verify']);
+  return await crypto.subtle.verify({name:'ECDSA',hash:'SHA-256'},k,Uint8Array.from(atob(sig),c=>c.charCodeAt(0)),enc.encode(msg))}catch(e){return false}}
+async function txErr(st,t,avail,seen){
+ if(!st.users[t.from]||!st.users[t.to]||t.from===t.to)return'Foydalanuvchi notoʻgʻri';
+ if(!I(t.amount)||t.amount<=0||!I(t.fee)||t.fee<0||!I(t.ts)||!I(t.n))return'Miqdor notoʻgʻri';
+ if(t.amount+t.fee>avail)return'Balans yetarli emas';
+ if(seen.has(t.sig))return'Takroriy tranzaksiya';
+ return await sigOk(st,t.from,txData(t),t.sig)?null:'Imzo notoʻgʻri'}
+async function blockErr(st,b){const tip=st.chain[st.chain.length-1];
+ if(!I(b.i)||b.i!==st.chain.length||b.prev!==tip.hash)return'Blok eskirgan: boshqa konchi oldinroq topdi';
+ if(b.diff!==st.diff)return'Qiyinchilik oʻzgargan, qayta qazing';
+ if(!b.txs.length||b.txs.length>200||!I(b.nonce)||!I(b.time))return'Blok parametrlari notoʻgʻri';
+ if(await merkle(b.txs)!==b.merkle)return'Merkle ildizi mos emas';
+ const h=await dsha(header(b));if(h!==b.hash||!h.startsWith('0'.repeat(b.diff)))return'Proof of Work notoʻgʻri';
+ const [cb,...rest]=b.txs,bl={},seen=chainSigs(st),B=a=>bl[a]??(bl[a]=bal(st,a,0));let fees=0;
+ for(const t of rest){const e=await txErr(st,t,B(t.from),seen);if(e)return e;seen.add(t.sig);bl[t.from]-=t.amount+t.fee;bl[t.to]=B(t.to)+t.amount;fees+=t.fee}
+ if(cb.from!=='COINBASE'||!st.users[cb.to]||cb.amount!==subsidy(b.i)+fees||cb.fee!==0)return'Mukofot miqdori notoʻgʻri';return null}
+async function fresh(){const g={i:0,prev:'0'.repeat(64),time:Date.now(),merkle:await dsha(''),diff:1,nonce:0,txs:[]};
+ while(!(g.hash=await dsha(header(g))).startsWith('0'))g.nonce++;
+ return{chain:[g],users:{},mempool:[],shop:{products:{},listings:{},inv:{}},diff:3,seq:0,opsig:{}}}
+async function handle(st,u,b){b=b||{};
+ if(u==='/api/register'){const p=b.pub||{},n=String(b.name||'').trim().slice(0,40),f=String(b.surname||'').trim().slice(0,40);
+  if(!n||!f||typeof p.x!=='string'||p.x.length!==43||typeof p.y!=='string'||p.y.length!==43)return{error:'Ism, familiya yoki kalit notoʻgʻri'};
+  const a=(await sha(p.x+p.y)).slice(0,20);if(!st.users[a])st.users[a]={name:n,surname:f,pub:{x:p.x,y:p.y},at:Date.now()};return{ok:1,addr:a}}
+ if(u==='/api/diff'){const d=b.d|0;if(d<1||d>6)return{error:'Qiyinchilik 1 dan 6 gacha'};st.diff=d;return{ok:1}}
+ if(u==='/api/tx'){const t=pickTx(b),e=await txErr(st,t,bal(st,t.from,1),new Set([...chainSigs(st),...st.mempool.map(m=>m.sig)]));if(e)return{error:e};
+  if(t.l){const L=st.shop.listings[t.l];if(!L||L.seller!==t.to||t.n<1||t.n>L.qty||t.amount!==L.price*t.n)return{error:'Mahsulot narxi yoki soni mos emas'};
+   L.qty-=t.n;const iv=st.shop.inv[t.from]=st.shop.inv[t.from]||{};iv[L.pid]=(iv[L.pid]||0)+t.n;if(L.qty===0)delete st.shop.listings[t.l]}
+  st.mempool.push(t);return{ok:1}}
+ if(u==='/api/shop'){const o={kind:String(b.kind),from:String(b.from),name:String(b.name||'').trim().slice(0,40),pid:String(b.pid||''),id:String(b.id||''),qty:b.qty,price:b.price,ts:b.ts},sig=String(b.sig||'');
+  if(!st.users[o.from]||st.opsig[sig]||!await sigOk(st,o.from,shopMsg(o),sig))return{error:'Imzo notoʻgʻri'};
+  const S=st.shop,inv=S.inv[o.from]=S.inv[o.from]||{};
+  if(o.kind==='new'){if(!o.name||!I(o.qty)||o.qty<1||!I(o.price)||o.price<1)return{error:'Nom, son yoki narx notoʻgʻri'};
+   const pid='p'+(++st.seq),id='l'+(++st.seq);S.products[pid]={name:o.name,creator:o.from};S.listings[id]={id,pid,seller:o.from,price:o.price,qty:o.qty}}
+  else if(o.kind==='relist'){if(!S.products[o.pid]||!I(o.qty)||o.qty<1||(inv[o.pid]||0)<o.qty||!I(o.price)||o.price<1)return{error:'Sizda bu miqdorda mahsulot yoʻq yoki narx notoʻgʻri'};
+   inv[o.pid]-=o.qty;const id='l'+(++st.seq);S.listings[id]={id,pid:o.pid,seller:o.from,price:o.price,qty:o.qty}}
+  else if(o.kind==='unlist'){const L=S.listings[o.id];if(!L||L.seller!==o.from)return{error:'Topilmadi'};inv[L.pid]=(inv[L.pid]||0)+L.qty;delete S.listings[o.id]}
+  else return{error:'Nomaʼlum amal'};
+  st.opsig[sig]=1;return{ok:1}}
+ if(u==='/api/restore'){ // Server uyqudan uygʻonib boʻsh qolganda, telefondagi nusxadan tiklash. Zanjir toʻliq qayta tekshiriladi.
+  if(st.chain.length>1||Object.keys(st.users).length)return{error:'Server boʻsh emas'};
+  const c=b.chain;if(!Array.isArray(c)||c.length<2||!b.users||typeof b.users!=='object')return{error:'Nusxa notoʻgʻri'};
+  const g=c[0];if(!g||g.i!==0||g.prev!=='0'.repeat(64)||(g.txs||[]).length||!I(g.nonce)||!I(g.diff)||g.hash!==await dsha(header(g))||!g.hash.startsWith('0'.repeat(g.diff)))return{error:'Genesis notoʻgʻri'};
+  const users={};for(const[a,x]of Object.entries(b.users))if(x&&x.pub&&typeof x.pub.x==='string'&&typeof x.pub.y==='string'&&(await sha(x.pub.x+x.pub.y)).slice(0,20)===a)users[a]={name:String(x.name).slice(0,40),surname:String(x.surname).slice(0,40),pub:{x:x.pub.x,y:x.pub.y},at:x.at};
+  const T={chain:[g],users,mempool:[],diff:1};
+  for(const x of c.slice(1)){const k={i:x.i,prev:String(x.prev),time:x.time,merkle:String(x.merkle),diff:x.diff,nonce:x.nonce,hash:String(x.hash),txs:(x.txs||[]).map(pickTx)};T.diff=k.diff;const e=await blockErr(T,k);if(e)return{error:'Zanjir yaroqsiz: '+e};T.chain.push(k)}
+  const sh=b.shop&&b.shop.products&&b.shop.listings&&b.shop.inv?b.shop:st.shop;
+  st.chain=T.chain;st.users=users;st.shop=sh;st.diff=I(b.diff)&&b.diff>=1&&b.diff<=6?b.diff:3;st.seq=I(b.seq)?b.seq:0;st.opsig=b.opsig&&typeof b.opsig==='object'?b.opsig:{};st.mempool=[];
+  for(const t of(Array.isArray(b.mempool)?b.mempool:[]).map(pickTx))if(!await txErr(st,t,bal(st,t.from,1),new Set([...chainSigs(st),...st.mempool.map(m=>m.sig)])))st.mempool.push(t);
+  return{ok:1}}
+ if(u==='/api/block'){if(!Array.isArray(b.txs))return{error:'Blok notoʻgʻri'};
+  const k={i:b.i,prev:String(b.prev),time:b.time,merkle:String(b.merkle),diff:b.diff,nonce:b.nonce,hash:String(b.hash),txs:b.txs.map(pickTx)};
+  const e=await blockErr(st,k);if(e)return{error:e};st.chain.push(k);const sg=new Set(k.txs.map(t=>t.sig));st.mempool=st.mempool.filter(t=>!sg.has(t.sig));return{ok:1}}
+ return{error:'Nomaʼlum soʻrov'}}
+const API={fresh,handle,bal,sha,dsha,merkle,header,txData,shopMsg,subsidy,HALVING,START};
+if(typeof module!=='undefined')module.exports=API;else g.Core=API;
+})(typeof window!=='undefined'?window:globalThis);
+
+const {sha,merkle,header,txData,shopMsg,subsidy,bal,HALVING,START}=Core,enc=new TextEncoder();
+const $=s=>document.querySelector(s),tick=()=>new Promise(r=>setTimeout(r));
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=s=>{const t=(s/1e8).toFixed(8).replace(/0+$/,'');return t.endsWith('.')?t+'0':t};
+const btc=id=>Math.round(parseFloat($(id).value)*1e8);
+const LK='btc_v2',KK='btc_v2_key',tabs=['Hamyon','Bozor','Qazish','Zanjir','Haqida'];
+let S={chain:[],users:{},mempool:[],shop:{products:{},listings:{},inv:{}},diff:3},N=null,mode='local',me=null,view=0,mining=false,stop=false,msg='',newKey='',showKey=false,ask=false;
+const ld=()=>{try{return JSON.parse(localStorage.getItem(LK))}catch(e){return null}},sv=()=>{try{localStorage.setItem(LK,JSON.stringify(N))}catch(e){}};
+const nm=a=>a==='COINBASE'?'Yangi bitcoin (mukofot)':S.users[a]?S.users[a].name+' '+S.users[a].surname:String(a).slice(0,8)+'…';
+const pn=p=>S.shop.products[p]?S.shop.products[p].name:p;
+async function post(u,b){if(mode==='server'){const r=await fetch('/api/post',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({u,b})});return r.json()}
+ const r=await Core.handle(N,u,b);if(r.ok)sv();S=N;return r}
+const cache=()=>{try{localStorage.setItem('btc_v2_cache',JSON.stringify(S))}catch(e){}};
+async function pull(){if(mode==='server'){S=await (await fetch('/api/state',{cache:'no-store'})).json();cache()}else S=N;if(!(mining&&view===2))render()}
+const sign=async m=>btoa(String.fromCharCode(...new Uint8Array(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},me.priv,enc.encode(m)))));
+async function login(k){k=k.trim();if(k.length!==129)throw Error('Kalit 129 belgidan iborat boʻlishi kerak');
+ const x=k.slice(0,43),y=k.slice(43,86),d=k.slice(86),addr=(await sha(x+y)).slice(0,20);if(!S.users[addr])throw Error('Bunday foydalanuvchi topilmadi');
+ me={addr,key:k,priv:await crypto.subtle.importKey('jwk',{kty:'EC',crv:'P-256',x,y,d,ext:true},{name:'ECDSA',namedCurve:'P-256'},false,['sign'])};
+ try{localStorage.setItem(KK,k)}catch(e){}}
+async function register(){const n=$('#rn').value.trim(),f=$('#rf').value.trim();if(!n||!f){msg='Ism va familiyani kiriting';return render()}
+ const k=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']),j=await crypto.subtle.exportKey('jwk',k.privateKey);
+ const r=await post('/api/register',{name:n,surname:f,pub:{x:j.x,y:j.y}});if(r.error){msg=r.error;return render()}
+ await pull();newKey=j.x+j.y+j.d;await login(newKey);msg='';view=0;render()}
+async function doLogin(){try{await login($('#lk').value);msg=''}catch(e){msg=e.message}render()}
+function logout(){try{localStorage.removeItem(KK)}catch(e){}me=null;newKey='';showKey=false;render()}
+function resetAll(){if(!ask){ask=true;return render()}try{localStorage.removeItem(LK);localStorage.removeItem(KK)}catch(e){}location.reload()}
+async function pay(to,amount,fee,l,n){const t={from:me.addr,to,amount,fee,ts:Date.now(),l:l||'',n:n||0};t.sig=await sign(txData(t));return post('/api/tx',t)}
+async function send(){const amount=btc('#sa'),fee=parseInt($('#sf').value),to=$('#st').value;if(!to||!(amount>0)||!(fee>=0)){msg='Maʼlumotlar notoʻgʻri';return render()}
+ const r=await pay(to,amount,fee);msg=r.error||'Yuborildi. Balans darrov yangilandi, blokka kirgach tasdiqlanadi.';await pull()}
+async function shop(kind,o){o={kind,from:me.addr,ts:Date.now(),...o};o.sig=await sign(shopMsg(o));const r=await post('/api/shop',o);msg=r.error||'Bajarildi';await pull()}
+const newItem=()=>shop('new',{name:$('#pn').value,qty:parseInt($('#pq').value),price:btc('#pp')});
+const relist=p=>shop('relist',{pid:p,qty:parseInt($('#rq_'+p).value),price:btc('#rp_'+p)});
+const unlist=id=>shop('unlist',{id});
+async function buy(id){const L=S.shop.listings[id],n=parseInt($('#bq_'+id).value||1);if(!L||!(n>0)){msg='Son notoʻgʻri';return render()}
+ const r=await pay(L.seller,L.price*n,1000,id,n);msg=r.error||`${n} dona ${pn(L.pid)} sotib olindi. Bitcoin darrov oʻtkazildi.`;await pull()}
+async function setDiff(d){const r=await post('/api/diff',{d:+d});msg=r.error||'';await pull()}
+async function mine(){if(mining||!me)return;mining=true;stop=false;msg='';render();
+ outer:while(!stop){const len=S.chain.length,tip=S.chain[len-1],p=[...S.mempool],d=S.diff,fees=p.reduce((a,t)=>a+t.fee,0);
+  const cb={from:'COINBASE',to:me.addr,amount:subsidy(len)+fees,fee:0,ts:Date.now(),sig:'',l:'',n:0},txs=[cb,...p];
+  const b={i:len,prev:tip.hash,time:Date.now(),merkle:await merkle(txs),diff:d,nonce:0,txs},z='0'.repeat(d),t0=performance.now();
+  for(;;){const h=await Core.dsha(header(b));
+   if(h.startsWith(z)){b.hash=h;const r=await post('/api/block',b);msg=r.error?r.error:`Blok #${len} qazildi! Mukofot: ${fmt(cb.amount)} BTC`;break outer}
+   b.nonce++;if(b.nonce%200===0){const e=$('#live');if(e)e.innerHTML=`Urinishlar: ${b.nonce}<br>Tezlik: ${Math.round(b.nonce/((performance.now()-t0)/1000))} xesh/s<br>${h}`;
+    await tick();if(stop)break outer;if(S.chain.length!==len||S.diff!==d)continue outer}}}
+ mining=false;await pull()}
+function render(){$('#who').textContent=(me?nm(me.addr)+' · ':'')+(mode==='server'?'umumiy server':'shu telefon');
+ $('#nav').innerHTML=me?tabs.map((t,i)=>`<button class="${i===view?'on':''}" onclick="view=${i};msg='';render()">${t}</button>`).join('')+'<button onclick="logout()">Chiqish</button>':'';
+ $('#main').innerHTML=!me?vAuth():[vWallet,vShop,vMine,vChain,vInfo][view]();if(me&&view===3)paint()}
+const M=()=>msg?`<p><b>${esc(msg)}</b></p>`:'';
+const vAuth=()=>`<div class="c"><h2>Roʻyxatdan oʻtish</h2><p class="m">Ism-familiya kiriting. Brauzer sizga maxfiy kalit yaratadi: u sizning parolingiz va hamyoningiz. Kalitni albatta nusxalab saqlang.</p>
+<div class="row"><input id="rn" placeholder="Ism"><input id="rf" placeholder="Familiya"><button class="b o" onclick="register()">Kalit yaratish</button></div></div>
+<div class="c"><h2>Kalit bilan kirish</h2><textarea id="lk" placeholder="Kalitni shu yerga qoʻying"></textarea><div class="row"><button class="b" onclick="doLogin()">Kirish</button></div></div>${M()}
+${mode==='local'?`<div class="c"><p class="m">Telefon rejimi: maʼlumotlar shu brauzerda saqlanadi.</p><button class="b" onclick="resetAll()">${ask?'Ha, hammasini oʻchirish':'Hammasini oʻchirib, boshidan boshlash'}</button></div>`:''}`;
+const vWallet=()=>{const tot=bal(S,me.addr,1),cf=bal(S,me.addr,0),d=tot-cf;
+ return `${newKey?`<div class="c key"><h2>Kalitingizni saqlab qoʻying!</h2><p class="m">Qayta kirish uchun shu kalit kerak. Uni notes yoki xabarlaringizga nusxalang.</p><code class="h">${newKey}</code><div class="row"><button class="b" onclick="navigator.clipboard.writeText(newKey)">Nusxalash</button><button class="b o" onclick="newKey='';render()">Saqladim</button></div></div>`:''}
+<div class="c"><h2>Balans</h2><div class="big">${fmt(tot)} BTC</div><p class="m">Tasdiqlangan: ${fmt(cf)} BTC${d?` · Blokka kirmagan: ${d>0?'+':'−'}${fmt(Math.abs(d))} BTC`:''}</p>
+<p class="m">Manzil: <code>${me.addr}</code></p><div class="row"><button class="b" onclick="showKey=!showKey;render()">${showKey?'Kalitni yashirish':'Kalitimni koʻrsatish'}</button></div>${showKey?`<code class="h">${me.key}</code>`:''}</div>
+<div class="c"><h2>Bitcoin yuborish</h2><div class="row"><select id="st">${Object.keys(S.users).filter(a=>a!==me.addr).map(a=>`<option value="${a}">${esc(nm(a))}</option>`).join('')}</select>
+<input id="sa" type="number" step="0.00000001" min="0" placeholder="BTC" style="width:120px"><input id="sf" type="number" value="1000" min="0" style="width:90px" title="Komissiya (satoshi)"><button class="b o" onclick="send()">Yuborish</button></div>
+<p class="m">Yuborilgan zahoti sizdan ayriladi va qabul qiluvchiga qoʻshiladi. Konchi blokka kiritgach tasdiqlanadi. Komissiya satoshida (1 BTC = 100 000 000 sat).</p>${M()}</div>
+<div class="c"><h3>Kutayotgan tranzaksiyalar (${S.mempool.length})</h3>${S.mempool.map(t=>`<div class="tx">${esc(nm(t.from))} → ${esc(nm(t.to))}: ${fmt(t.amount)} BTC${t.l?' (mahsulot xaridi)':''}</div>`).join('')||'<p class="m">Yoʻq.</p>'}</div>`};
+const vShop=()=>{const inv=Object.entries(S.shop.inv[me.addr]||{}).filter(e=>e[1]>0),ls=Object.values(S.shop.listings);
+ return `<div class="c"><h2>Sotuvdagi mahsulotlar</h2>${ls.map(L=>`<div class="tx"><b>${esc(pn(L.pid))}</b> · ${fmt(L.price)} BTC · qoldi: ${L.qty}<br><span class="m">Sotuvchi: ${esc(nm(L.seller))}</span>
+${L.seller===me.addr?`<div class="row"><button class="b" onclick="unlist('${L.id}')">Sotuvdan olish</button></div>`:`<div class="row"><input id="bq_${L.id}" type="number" min="1" max="${L.qty}" value="1" style="width:80px"><button class="b o" onclick="buy('${L.id}')">Sotib olish</button></div>`}</div>`).join('')||'<p class="m">Hozircha sotuvda mahsulot yoʻq.</p>'}${M()}</div>
+<div class="c"><h2>Yangi mahsulot qoʻyish</h2><div class="row"><input id="pn" placeholder="Nomi (masalan, Pitsa)"><input id="pq" type="number" min="1" value="10" style="width:80px" title="Soni"><input id="pp" type="number" step="0.00000001" min="0" placeholder="Narxi, BTC" style="width:130px"><button class="b o" onclick="newItem()">Sotuvga qoʻyish</button></div></div>
+<div class="c"><h2>Mening mahsulotlarim</h2><p class="m">Sotib olganlaringiz shu yerga tushadi. Istalgan narxda (qimmatroq ham) qayta sotishingiz mumkin.</p>${inv.map(([p,q])=>`<div class="tx"><b>${esc(pn(p))}</b> · sizda: ${q} dona
+<div class="row"><input id="rq_${p}" type="number" min="1" max="${q}" value="${q}" style="width:80px"><input id="rp_${p}" type="number" step="0.00000001" min="0" placeholder="Yangi narx, BTC" style="width:140px"><button class="b" onclick="relist('${p}')">Qayta sotish</button></div></div>`).join('')||'<p class="m">Hozircha yoʻq.</p>'}</div>`};
+const vMine=()=>{const n=S.chain.length;return `<div class="c"><h2>Qazish</h2><p>Keyingi blok #${n}. Mukofot: <b>${fmt(subsidy(n))} BTC</b> + komissiyalar (${fmt(S.mempool.reduce((a,t)=>a+t.fee,0))} BTC).</p>
+<div class="row"><label>Qiyinchilik: <select ${mining?'disabled':''} onchange="setDiff(this.value)">${[1,2,3,4,5,6].map(d=>`<option ${d===S.diff?'selected':''}>${d}</option>`).join('')}</select></label></div>
+<p>Xesh <span class="z">${'0'.repeat(S.diff)}</span> bilan boshlanishi kerak. Oʻrtacha ${(16**S.diff).toLocaleString()} urinish.</p><p class="m">Har bir daraja qazishni 16 barobar qiyinlashtiradi. Telefonda 4 gacha tez, 5–6 juda sekin boʻlishi mumkin. Qiyinchilik hamma uchun umumiy.</p>
+<div class="row"><button class="b o" onclick="mine()" ${mining?'disabled':''}>Blok qazish</button><button class="b" onclick="stop=true">Toʻxtatish</button></div>
+<div id="live" class="h">${mining?'Boshlanmoqda…':'Tayyor.'}</div>${M()}</div>`};
+const vChain=()=>`<div class="c"><h2>Umumiy zanjir (${S.chain.length} blok)</h2><p class="m">Brauzeringiz har bir blokni oʻzi qayta tekshiradi.</p></div><div id="blocks">Tekshirilmoqda…</div>`;
+async function paint(){let h='',prev=null,ok=true;
+ for(const b of S.chain){const e=(await Core.dsha(header(b)))!==b.hash||!b.hash.startsWith('0'.repeat(b.diff))||(b.i>0&&b.prev!==prev)||(await merkle(b.txs))!==b.merkle;prev=b.hash;if(e)ok=false;const cb=b.txs[0];
+  h=`<div class="c blk ${ok?'':'bad'}"><b>Blok #${b.i}</b> <span class="m">${new Date(b.time).toLocaleString()} · ${ok?'tekshirildi':'YAROQSIZ'} · qiyinchilik ${b.diff}</span>
+  ${cb?`<p>Konchi: <b>${esc(nm(cb.to))}</b> · Mukofot: <b>${fmt(cb.amount)} BTC</b></p>`:'<p class="m">Genesis blok</p>'}
+  <div class="m">Xesh (nonce ${b.nonce})</div><code class="h"><span class="z">${b.hash.slice(0,b.diff)}</span>${b.hash.slice(b.diff)}</code>
+  <div class="m">Oldingi xesh</div><code class="h">${b.prev}</code><div class="m">Merkle ildizi</div><code class="h">${b.merkle}</code>
+  ${b.txs.slice(1).map(t=>`<div class="tx">${esc(nm(t.from))} → ${esc(nm(t.to))}: ${fmt(t.amount)} BTC${t.l?' (mahsulot xaridi)':''}</div>`).join('')}</div>`+h}
+ const el=$('#blocks');if(el)el.innerHTML=h}
+const vInfo=()=>`<div class="c"><h2>Bitcoin qanday qazib olinadi</h2><p>1. Konchi kutayotgan tranzaksiyalarni blokka yigʻadi va oʻziga mukofot yozadi.</p><p>2. Blok sarlavhasini ikki marta SHA-256 bilan xeshlaydi. Natija kerakli miqdordagi nol bilan boshlanishi shart.</p><p>3. Boʻlmasa nonce ni 1 ga oshirib qayta urinadi. Faqat taxmin qilish mumkin, shuning uchun “ish isboti” deyiladi.</p>
+<p>4. Topgan konchi blokni yuboradi, hamma tekshiradi, mukofot konchiga tushadi.</p><p><b>Mukofot:</b> har 210 000 blokda yarmiga kamayadi. 2024-yil aprelidagi halvingdan beri 3.125 BTC. Umumiy bitcoin 21 milliondan oshmaydi.</p></div>`;
+(async()=>{try{const r=await fetch('/api/state',{cache:'no-store'});if(r.ok&&(r.headers.get('content-type')||'').includes('json')){mode='server';S=await r.json();let c=null;try{c=JSON.parse(localStorage.getItem('btc_v2_cache'))}catch(e){}
+  if(S.chain.length===1&&!Object.keys(S.users).length&&c&&c.chain&&c.chain.length>1){const x=await post('/api/restore',c);if(x.ok)S=await (await fetch('/api/state',{cache:'no-store'})).json()}
+  cache();new EventSource('/api/events').onmessage=pull}}catch(e){}
+ if(mode==='local'){N=ld();if(!N||!N.chain)N=await Core.fresh();sv();S=N}
+ let k=null;try{k=localStorage.getItem(KK)}catch(e){}if(k){try{await login(k)}catch(e){}}render()})();
+</script></body></html>
